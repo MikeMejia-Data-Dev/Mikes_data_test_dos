@@ -1,0 +1,8 @@
+apache-airflow-providers-postgres
+pandas
+sqlalchemy
+psycopg2-binary
+pyarrow
+
+Usuario: admin
+Password: dfutydy8xQAbBX4T

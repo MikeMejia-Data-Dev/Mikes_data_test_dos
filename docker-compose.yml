@@ -1,0 +1,91 @@
+x-airflow-common: &airflow-common
+  build: .
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@${EXTERNAL_DB_HOST}:${EXTERNAL_DB_PORT}/${AIRFLOW_DB_NAME}
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    DW_DB_USER: ${DW_DB_USER}
+    DW_DB_PASSWORD: ${DW_DB_PASSWORD}
+    DW_DB_HOST: ${EXTERNAL_DB_HOST}
+    DW_DB_PORT: ${EXTERNAL_DB_PORT}
+    DW_DB_NAME: ${DW_DB_NAME}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./sql:/opt/airflow/sql
+    - ./data:/opt/airflow/data
+    - ./logs:/opt/airflow/logs
+
+services:
+
+  # -------------------------------------------------
+  # Inicialización: crea usuario admin, Connections, Variables
+  # y aplica el esquema SQL contra el datawarehouse externo.
+  # Corre una vez y termina (no es un servicio de larga duración).
+  #
+  # NOTA: tanto la metadata de Airflow como el datawarehouse analítico
+  # corren en un servidor PostgreSQL EXTERNO (15.204.173.204:6432),
+  # NO dentro de docker-compose. Ver documento de decisiones técnicas,
+  # sección "Infraestructura de base de datos", para la justificación.
+  # -------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Aplicando esquema SQL al datawarehouse externo..."
+        PGPASSWORD="${DW_DB_PASSWORD}" psql \
+          -h "${EXTERNAL_DB_HOST}" -p "${EXTERNAL_DB_PORT}" \
+          -U "${DW_DB_USER}" -d "${DW_DB_NAME}" \
+          -f /opt/airflow/sql/create_tables.sql
+
+        airflow db migrate
+
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname Admin \
+          --lastname DataMart \
+          --role Admin \
+          --email admin@datamart.local || true
+
+        airflow connections delete 'postgres_dw' || true
+        airflow connections add 'postgres_dw' \
+          --conn-type 'postgres' \
+          --conn-host "${EXTERNAL_DB_HOST}" \
+          --conn-port "${EXTERNAL_DB_PORT}" \
+          --conn-schema "${DW_DB_NAME}" \
+          --conn-login "${DW_DB_USER}" \
+          --conn-password "${DW_DB_PASSWORD}"
+
+        airflow variables set source_data_path "/opt/airflow/data/raw"
+        airflow variables set rejection_min_unit_price "0.01"
+
+  # -------------------------------------------------
+  # Webserver
+  # -------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-init
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # -------------------------------------------------
+  # Scheduler
+  # -------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      - airflow-init
