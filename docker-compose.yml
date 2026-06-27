@@ -4,9 +4,13 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@${EXTERNAL_DB_HOST}:${EXTERNAL_DB_PORT}/${AIRFLOW_DB_NAME}
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${JWT_SECRET}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__INTERNAL_API_URL: "http://airflow-webserver:8080"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-webserver:8080/execution/"
+    AIRFLOW__WORKERS__BASE_URL: "http://airflow-webserver:8080"
     DW_DB_USER: ${DW_DB_USER}
     DW_DB_PASSWORD: ${DW_DB_PASSWORD}
     DW_DB_HOST: ${EXTERNAL_DB_HOST}
@@ -76,7 +80,7 @@ services:
     depends_on:
       - airflow-init
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -89,3 +93,17 @@ services:
     command: scheduler
     depends_on:
       - airflow-init
+
+  # -------------------------------------------------
+  # DAG PROCESSOR
+  # -------------------------------------------------
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully    
+  
+
+
